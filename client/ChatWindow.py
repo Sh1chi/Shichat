@@ -24,6 +24,14 @@ from PyQt5.QtWidgets import (
 )
 
 from NetworkWorker import NetworkWorker
+from Bubble import Bubble
+from theme import DarkTheme as T
+
+DARK_BG          = "#1F1F1F"   # общий фон
+DARK_PANEL       = "#2A2A2E"   # фон правой панели и «пузырей» входящих сообщений
+DARK_ACCENT      = "#2481CC"   # фирменный «телеграм-голубой»
+DARK_TEXT        = "#E0E0E0"
+DARK_SUBTEXT     = "#A0A0A0"
 
 
 # -------------------------- Главное окно чата ----------------------------
@@ -40,13 +48,16 @@ class ChatWindow(QWidget):
         self.current_peer: str | None = None  # текущий собеседник
 
         # ---------- Интерфейс ----------
+        self.setStyleSheet(f"background:{T.BG}; color:{T.TEXT_MAIN};")
 
         # Основной разделитель: список слева, чат справа
         splitter = QSplitter(self)
 
+
         # Список пользователей
         self.user_list = QListWidget()
         self.user_list.itemClicked.connect(self.change_chat)
+        self.user_list.setStyleSheet(T.qss_user_list())
         splitter.addWidget(self.user_list)
 
         # Правая панель — заголовок, переписка и ввод
@@ -57,12 +68,12 @@ class ChatWindow(QWidget):
         # Заголовок текущего чата
         self.header = QLabel("Выберите чат")
         self.header.setAlignment(Qt.AlignCenter)
-        self.header.setStyleSheet("font-size:16px;padding:8px;")
+        self.header.setStyleSheet(T.qss_header())
         right_layout.addWidget(self.header)
 
         # Область для отображения сообщений
         self.chat_view = QTextBrowser()
-        self.chat_view.setStyleSheet("background:#F5F5F5;padding:8px;")
+        self.chat_view.setStyleSheet(T.qss_chat_view())
         self.chat_view.setOpenExternalLinks(True)
         right_layout.addWidget(self.chat_view, 1)
 
@@ -71,9 +82,12 @@ class ChatWindow(QWidget):
         self.input_edit = QLineEdit()
         self.input_edit.setPlaceholderText("Напишите сообщение…")
         self.input_edit.returnPressed.connect(self.send_message)
+        self.input_edit.setStyleSheet(T.qss_input())
 
         self.send_btn = QPushButton("➤")
         self.send_btn.clicked.connect(self.send_message)
+        self.send_btn.setStyleSheet(T.qss_button())
+
         input_panel.addWidget(self.input_edit, 1)
         input_panel.addWidget(self.send_btn)
         right_layout.addLayout(input_panel)
@@ -91,51 +105,33 @@ class ChatWindow(QWidget):
         self.net.connection_lost.connect(self.on_disconnect)
         self.net.start()
 
-    def _format_msg_html(self, text: str, outgoing: bool, ts: int) -> str:
-        # Форматирование сообщения как HTML "пузыря"
-        time_str = datetime.fromtimestamp(ts).strftime("%H:%M")
-        align = "right" if outgoing else "left"
-        margin = "margin-left:40%;" if outgoing else "margin-right:40%;"
-        bg_color = "#DCF8C6" if outgoing else "#FFFFFF"
-
-        html = (
-            f'<div style="text-align:{align}; {margin} padding:4px 0;">'
-            f'  <div style="background:{bg_color}; '
-            f'              border-radius:12px; '
-            f'              padding:6px 10px; '
-            f'              display:inline-block; '
-            f'              font-size:14px; '
-            f'              white-space:pre-wrap;">'
-            f'    {text}'
-            f'    <div style="font-size:10px; color:#555; text-align:right;">{time_str}</div>'
-            f'  </div>'
-            f'</div>'
-        )
-        return html
-
     def change_chat(self, item: QListWidgetItem):
         # Переключение на выбранный чат
         peer = item.text()
         self.current_peer = peer
         self.header.setText(peer)
         self.chat_view.clear()
+
         for msg in self.messages[peer]:
             outgoing = msg["from"] == self.username
-            self.chat_view.append(
-                self._format_msg_html(msg["content"], outgoing, msg["timestamp"])
-            )
+            self.chat_view.append(Bubble.html(msg["content"], outgoing, msg["timestamp"]))
+
         self.chat_view.moveCursor(QTextCursor.End)
+
 
     def on_userlist(self, users: list):
         # Обновление списка пользователей
         current = self.current_peer
         self.user_list.clear()
+
         for user in sorted(u for u in users if u != self.username):
             self.user_list.addItem(QListWidgetItem(user))
+
         if current and any(u == current for u in users):
             items = self.user_list.findItems(current, Qt.MatchExactly)
             if items:
                 self.user_list.setCurrentItem(items[0])
+
 
     def on_message(self, pkt: dict):
         # Обработка входящего сообщения
@@ -153,7 +149,7 @@ class ChatWindow(QWidget):
         outgoing = frm == self.username
 
         if peer == self.current_peer:
-            self.chat_view.append(self._format_msg_html(content, outgoing, ts))
+            self.chat_view.append(Bubble.html(content, outgoing, ts))
             self.chat_view.moveCursor(QTextCursor.End)
 
     def send_message(self):
