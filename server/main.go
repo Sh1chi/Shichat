@@ -34,6 +34,11 @@ var (
 )
 
 func main() {
+	if err := InitDB(); err != nil {
+		panic(err)
+	}
+	defer DB.Close()
+
 	// Запускаем TCP-сервер на порту 8080
 	ln, err := net.Listen("tcp", ":8080")
 	if err != nil {
