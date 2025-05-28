@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,10 +13,13 @@ import (
 // Структура описывает формат всех сообщений между клиентом и сервером.
 // Тип определяет, о чём это сообщение: регистрация, личное сообщение или список пользователей.
 type Message struct {
-	Type      string   `json:"type"`                // Тип сообщения: "register", "message", "userlist"
-	From      string   `json:"from,omitempty"`      // Имя отправителя
-	To        string   `json:"to,omitempty"`        // Имя получателя (для личных сообщений)
-	Content   string   `json:"content,omitempty"`   // Содержимое сообщения
+	Type      string   `json:"type"`              // Тип сообщения: "signup", "signin", "message", "history" "userlist"
+	From      string   `json:"from,omitempty"`    // Имя отправителя
+	To        string   `json:"to,omitempty"`      // Имя получателя (для личных сообщений)
+	Content   string   `json:"content,omitempty"` // Содержимое сообщения
+	Password  string   `json:"password,omitempty"`
+	FirstName string   `json:"first_name,omitempty"`
+	LastName  string   `json:"last_name,omitempty"`
 	Timestamp int64    `json:"timestamp,omitempty"` // Метка времени (секунды Unix)
 	Users     []string `json:"users,omitempty"`     // Список имён (используется в userlist)
 }
@@ -24,6 +28,7 @@ type Message struct {
 type Client struct {
 	Conn net.Conn
 	Name string
+	ID   int64
 }
 
 // Глобальные переменные для хранения подключённых клиентов
@@ -75,24 +80,41 @@ func handleConnection(conn net.Conn) {
 	if !scanner.Scan() {
 		return
 	}
-	var reg Message
-	if err := json.Unmarshal(scanner.Bytes(), &reg); err != nil || reg.Type != "register" || reg.From == "" {
-		return // если пакет неправильный — отключаем клиента
-	}
-	username := reg.From
 
-	mu.Lock()
-	// Если пользователь с таким именем уже онлайн — отключаем его старое соединение
-	if oldConn, exists := nameToConn[username]; exists {
-		oldConn.Close()
-		delete(clients, oldConn)
+	var initMsg Message
+	if err := json.Unmarshal(scanner.Bytes(), &initMsg); err != nil {
+		return
 	}
-	// Регистрируем нового клиента
-	clients[conn] = &Client{Conn: conn, Name: username}
-	nameToConn[username] = conn
-	mu.Unlock()
 
-	broadcastUserList() // Обновляем список пользователей у всех клиентов
+	switch initMsg.Type {
+	case "signup":
+		handleSignup(conn, initMsg)
+		return // после успешной регистрации можно закрыть соединение
+	case "signin":
+		// Проверяем пароль, обновляем last_login_at и шлём login_ok
+		userID, err := handleLogin(conn, initMsg)
+		if err != nil {
+			// При ошибке handleLogin сам отправит sendError и мы просто выходим
+			return
+		}
+
+		// Регистрация в оперативных структурах — без return!
+		mu.Lock()
+		// если уже онлайн — убираем старое
+		if old, ok := nameToConn[initMsg.From]; ok {
+			old.Close()
+			delete(clients, old)
+		}
+		clients[conn] = &Client{Conn: conn, Name: initMsg.From, ID: userID}
+		nameToConn[initMsg.From] = conn
+		mu.Unlock()
+
+		broadcastUserList()
+
+	default:
+		// ни signup, ни signin — обрываем
+		return
+	}
 
 	// Цикл приёма всех последующих сообщений от клиента
 	for scanner.Scan() {
@@ -103,6 +125,8 @@ func handleConnection(conn net.Conn) {
 		switch m.Type {
 		case "message":
 			handlePersonalMessage(conn, m) // обрабатываем личное сообщение
+		case "history":
+			handleHistoryRequest(conn, m)
 		default:
 			// Неизвестный тип пакета — игнорируем
 		}
@@ -125,14 +149,34 @@ func handlePersonalMessage(senderConn net.Conn, m Message) {
 	}
 
 	m.From = sender.Name // на всякий случай указываем имя отправителя вручную
+
+	ctx := context.Background()
+
+	receiverID, err := GetOrCreateUser(ctx, m.To)
+	if err != nil {
+		fmt.Println("DB error (receiver):", err)
+		return
+	}
+
+	chatID, err := GetOrCreatePrivateChat(ctx, sender.ID, receiverID)
+	if err != nil {
+		fmt.Println("DB error (chat):", err)
+		return
+	}
+
+	err = SavePrivateMessage(ctx, chatID, sender.ID, m.Content)
+	if err != nil {
+		fmt.Println("Ошибка сохранения сообщения:", err)
+	}
+
 	data, _ := json.Marshal(m)
 	data = append(data, '\n') // добавляем \n, чтобы клиент мог прочитать это как строку
 
-	receiverConn.Write(data) // отправляем получателю
-
-	// Отправляем копию сообщения и отправителю (чтобы у него тоже отобразилось)
+	if ok {
+		receiverConn.Write(data) // отправляем получателю, если онлайн
+	}
 	if senderConn != receiverConn {
-		senderConn.Write(data)
+		senderConn.Write(data) // отправляем копию самому отправителю
 	}
 }
 
