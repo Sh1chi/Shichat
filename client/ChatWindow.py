@@ -112,6 +112,18 @@ class ChatWindow(QWidget):
         self.header.setText(peer)
         self.chat_view.clear()
 
+        # Запрашиваем историю сообщений с сервера
+        pkt = {
+            "type": "history",
+            "from": self.username,
+            "to": peer,
+        }
+        try:
+            self.sock.sendall((json.dumps(pkt) + "\n").encode())
+        except OSError:
+            self.on_disconnect()
+            return
+
         for msg in self.messages[peer]:
             outgoing = msg["from"] == self.username
             self.chat_view.append(Bubble.html(msg["content"], outgoing, msg["timestamp"]))
@@ -137,7 +149,7 @@ class ChatWindow(QWidget):
         # Обработка входящего сообщения
         frm, to, content = pkt.get("from"), pkt.get("to"), pkt.get("content")
         ts = pkt.get("timestamp", int(time.time()))
-        peer = frm if frm != self.username else to
+        peer = to if to != self.username else frm
 
         self.messages[peer].append({
             "from": frm,

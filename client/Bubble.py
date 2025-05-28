@@ -12,25 +12,57 @@ from theme import DarkTheme as T
 
 
 class Bubble:
-    """Статический генератор HTML‑«пузырей», цвета берутся из Theme."""
-
     @classmethod
     def html(cls, text: str, outgoing: bool, ts: int) -> str:
-        """Вернёт HTML «пузыря» (как строку)."""
-        side = "right" if outgoing else "left"
-        bg_color = T.ACCENT if outgoing else T.PANEL
-        time_str = datetime.fromtimestamp(ts).strftime("%H:%M")
+        # Цвета
+        bg_out    = T.ACCENT                   # ваш цвет «исходящих»
+        bg_in     = T.ACCENT_SOFT                    # цвет «входящих» (можно чуть светлее)
+        bg_color  = bg_out if outgoing else bg_in
+        txt_color = T.TEXT_MAIN
+        sub_color = T.TEXT_SUB
+        time_str  = datetime.fromtimestamp(ts).strftime("%H:%M")
 
-        return (
-            f'<div style="width:100%; overflow:hidden; margin:4px 0;">'
-            f'  <div style="float:{side}; background:{bg_color}; '
-            f'              color:{T.TEXT_MAIN}; border-radius:12px; '
-            f'              padding:6px 10px; max-width:60%; '
-            f'              display:inline-block; font-size:14px; '
-            f'              white-space:pre-wrap;">'
-            f'    {text}'
-            f'    <div style="font-size:10px; color:{T.TEXT_SUB}; '
-            f'                text-align:right;">{time_str}</div>'
+        # HTML самого пузыря — inline-block, width:auto, max-width чтобы не расползалось
+        bubble_div = (
+            f'<div style="display:inline-block;'
+            f' width:auto; max-width:60%; white-space:pre-wrap;'
+            f' padding:8px 12px; border-radius:16px; overflow:hidden;'
+            f' background:{bg_color}; color:{txt_color}; font-size:14px;">'
+            f'  {text}'
+            f'  <div style="font-size:10px; color:{sub_color}; '
+            f'             text-align:right; margin-top:4px;">'
+            f'    {time_str}'
             f'  </div>'
             f'</div>'
         )
+
+        # Обёртка-таблица с двумя ячейками
+        # Для outgoing — пустая ячейка слева, пузырь справа
+        # Для incoming — наоборот
+        if outgoing:
+            return (
+                '<table width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0;">'
+                '  <tr>'
+                '    <td></td>'
+                '    <td align="right" valign="top">'
+                f'      {bubble_div}'
+                '    </td>'
+                '  </tr>'
+                '</table>'
+            )
+        else:
+            return (
+                '<table width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0;">'
+                '  <tr>'
+                '    <td align="left" valign="top">'
+                f'      {bubble_div}'
+                '    </td>'
+                '    <td></td>'
+                '  </tr>'
+                '</table>'
+            )
+
+
+
+
+

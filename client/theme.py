@@ -8,6 +8,7 @@ class DarkTheme:
     PANEL         = "#2A2A2E"   # правая панель и входящие «пузыри»
     ACCENT        = "#2481CC"   # фирменный голубой
     ACCENT_HOVER  = "#3099E5"
+    ACCENT_SOFT = "#2F2F35"
     FIELD         = "#3A3A3C"   # инпут‑бар
     TEXT_MAIN     = "#E0E0E0"   # основной текст
     TEXT_SUB      = "#A0A0A0"   # таймстемпы, второстепенный текст
