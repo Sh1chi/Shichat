@@ -13,15 +13,33 @@ import (
 // Структура описывает формат всех сообщений между клиентом и сервером.
 // Тип определяет, о чём это сообщение: регистрация, личное сообщение или список пользователей.
 type Message struct {
-	Type      string   `json:"type"`              // Тип сообщения: "signup", "signin", "message", "history" "userlist"
-	From      string   `json:"from,omitempty"`    // Имя отправителя
-	To        string   `json:"to,omitempty"`      // Имя получателя (для личных сообщений)
-	Content   string   `json:"content,omitempty"` // Содержимое сообщения
-	Password  string   `json:"password,omitempty"`
-	FirstName string   `json:"first_name,omitempty"`
-	LastName  string   `json:"last_name,omitempty"`
-	Timestamp int64    `json:"timestamp,omitempty"` // Метка времени (секунды Unix)
-	Users     []string `json:"users,omitempty"`     // Список имён (используется в userlist)
+	Type      string        `json:"type"`              // Тип сообщения: "signup", "signin", "message", "history" "userlist"
+	From      string        `json:"from,omitempty"`    // Имя отправителя
+	To        string        `json:"to,omitempty"`      // Имя получателя (для личных сообщений)
+	Content   string        `json:"content,omitempty"` // Содержимое сообщения
+	Password  string        `json:"password,omitempty"`
+	FirstName string        `json:"first_name,omitempty"`
+	LastName  string        `json:"last_name,omitempty"`
+	Query     string        `json:"query,omitempty"`
+	Timestamp int64         `json:"timestamp,omitempty"` // Метка времени (секунды Unix)
+	Chats     []ChatPreview `json:"chats,omitempty"`
+	Users     []UserSummary `json:"users,omitempty"`
+	Chat      *ChatPreview  `json:"chat,omitempty"`
+}
+
+type ChatPreview struct {
+	ChatID      int64  `json:"chat_id"`
+	Peer        string `json:"peer"` // username собеседника
+	DisplayName string `json:"display_name"`
+	LastMsg     string `json:"last_msg"`
+	LastTS      int64  `json:"last_ts"`
+}
+
+// Новые структуры для выдачи результатов поиска
+// Пользователь для поиска
+type UserSummary struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
 }
 
 // Структура клиента: имя и соединение.
@@ -109,8 +127,6 @@ func handleConnection(conn net.Conn) {
 		nameToConn[initMsg.From] = conn
 		mu.Unlock()
 
-		broadcastUserList()
-
 	default:
 		// ни signup, ни signin — обрываем
 		return
@@ -127,59 +143,80 @@ func handleConnection(conn net.Conn) {
 			handlePersonalMessage(conn, m) // обрабатываем личное сообщение
 		case "history":
 			handleHistoryRequest(conn, m)
+		case "user_search":
+			go handleUserSearch(conn, m)
+		case "start_chat":
+			go handleStartChat(conn, m)
 		default:
 			// Неизвестный тип пакета — игнорируем
 		}
 	}
 }
 
-// Обрабатывает личное сообщение: отправляет его получателю и самому отправителю (эхо).
+// Обрабатывает личное сообщение:
+// 1) сохраняет в БД,
+// 2) шлёт получателю и самому отправителю,
+// 3) обновляет у них список чатов (превью последнего сообщения).
 func handlePersonalMessage(senderConn net.Conn, m Message) {
 	mu.Lock()
-	receiverConn, ok := nameToConn[m.To] // находим получателя по имени
-	sender := clients[senderConn]        // получаем данные об отправителе
+	receiverConn, ok := nameToConn[m.To] // находим коннект получателя
+	sender := clients[senderConn]        // данные отправителя
 	mu.Unlock()
 
-	if !ok || sender == nil {
-		return // если получателя нет — ничего не делаем
+	if sender == nil {
+		return // получателя нет — просто выходим
 	}
 
+	// Если таймстамп не пришёл — ставим текущее время
 	if m.Timestamp == 0 {
-		m.Timestamp = time.Now().Unix() // если время не указано — ставим текущее
+		m.Timestamp = time.Now().Unix()
 	}
-
-	m.From = sender.Name // на всякий случай указываем имя отправителя вручную
+	// На всякий случай подставляем имя отправителя
+	m.From = sender.Name
 
 	ctx := context.Background()
 
-	receiverID, err := GetOrCreateUser(ctx, m.To)
+	var receiverID int64
+	err := DB.QueryRow(ctx,
+		`SELECT id FROM users WHERE username=$1`, m.To,
+	).Scan(&receiverID)
 	if err != nil {
-		fmt.Println("DB error (receiver):", err)
+		// такого пользователя нет в БД — можно отправить ошибку или просто вернуть
+		sendError(senderConn, "Пользователь не найден")
 		return
 	}
 
+	// Получаем или создаём приватный чат
 	chatID, err := GetOrCreatePrivateChat(ctx, sender.ID, receiverID)
 	if err != nil {
 		fmt.Println("DB error (chat):", err)
 		return
 	}
-
-	err = SavePrivateMessage(ctx, chatID, sender.ID, m.Content)
-	if err != nil {
+	// Сохраняем сообщение
+	if err := SavePrivateMessage(ctx, chatID, sender.ID, m.Content); err != nil {
 		fmt.Println("Ошибка сохранения сообщения:", err)
 	}
 
+	// Сериализуем пакет для отправки
 	data, _ := json.Marshal(m)
-	data = append(data, '\n') // добавляем \n, чтобы клиент мог прочитать это как строку
+	data = append(data, '\n')
 
-	if ok {
-		receiverConn.Write(data) // отправляем получателю, если онлайн
+	// 1) Эхо отправителю — всегда
+	senderConn.Write(data)
+	// 2) Если получатель сейчас онлайн — шлём ему тоже
+	if ok && receiverConn != senderConn {
+		receiverConn.Write(data)
 	}
-	if senderConn != receiverConn {
-		senderConn.Write(data) // отправляем копию самому отправителю
+
+	// 1) всегда обновляем отправителю
+	sendChatList(senderConn, sender.ID)
+	// 2) а получателю — только если он онлайн
+	if ok {
+		sendChatList(receiverConn, receiverID)
 	}
 }
 
+/*
 // Рассылает всем клиентам список имён пользователей, которые сейчас онлайн
 func broadcastUserList() {
 	mu.Lock()
@@ -204,6 +241,7 @@ func broadcastUserList() {
 		c.Write(data)
 	}
 }
+*/
 
 // Удаляет клиента из общих структур при отключении
 func removeClient(conn net.Conn) {
@@ -214,5 +252,4 @@ func removeClient(conn net.Conn) {
 	delete(clients, conn) // удаляем по соединению
 	mu.Unlock()
 
-	broadcastUserList() // обновляем список онлайн-пользователей
 }

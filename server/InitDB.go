@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -127,73 +128,78 @@ func SavePrivateMessage(ctx context.Context, chatID, senderID int64, content str
 // Отправляет клиенту последние 50 сообщений диалога
 // между текущим пользователем (conn) и m.To.
 func handleHistoryRequest(conn net.Conn, m Message) {
+	// 1) Снимаем sender из clients под мьютексом
 	mu.Lock()
-	sender := clients[conn] // кто спрашивает историю
-	receiverConn, ok := nameToConn[m.To]
-	receiver := clients[receiverConn] // с кем диалог
+	sender := clients[conn]
 	mu.Unlock()
-
-	// Если не нашли адресата — выходим тихо
-	if sender == nil || !ok || receiver == nil {
-		return
+	if sender == nil {
+		return // неавторизованный
 	}
 
 	ctx := context.Background()
 
-	// Находим (или создаём) приватный чат
-	chatID, err := GetOrCreatePrivateChat(ctx, sender.ID, receiver.ID)
-	if err != nil {
-		fmt.Println("DB error (history chat):", err)
+	// 2) Узнаём ID собеседника из БД (peer = m.To)
+	var receiverID int64
+	if err := DB.QueryRow(ctx,
+		`SELECT id FROM users WHERE username = $1`, m.To,
+	).Scan(&receiverID); err != nil {
+		fmt.Println("DB error (lookup receiver):", err)
 		return
 	}
 
-	// Берём последние 50 сообщений, самые свежие сверху
+	// 3) Получаем или создаём chat_id для этой пары
+	chatID, err := GetOrCreatePrivateChat(ctx, sender.ID, receiverID)
+	if err != nil {
+		fmt.Println("DB error (chat):", err)
+		return
+	}
+
+	// 4) Достаем последние 50 сообщений (DESC → самые свежие первыми)
 	rows, err := DB.Query(ctx, `
-		SELECT sender_id, content, sent_at
-		FROM messages
-		WHERE chat_id = $1
-		ORDER BY sent_at DESC
-		LIMIT 50
-	`, chatID)
+        SELECT sender_id, content, sent_at
+        FROM messages
+        WHERE chat_id = $1
+        ORDER BY sent_at DESC
+        LIMIT 50
+    `, chatID)
 	if err != nil {
 		fmt.Println("DB error (history query):", err)
 		return
 	}
 	defer rows.Close()
 
-	// Собираем слайс Message в хронологическом порядке (старые → новые)
+	// 5) Собираем []Message в порядке старые→новые
 	var history []Message
 	for rows.Next() {
 		var senderID int64
 		var content string
 		var ts time.Time
-		err := rows.Scan(&senderID, &content, &ts)
-		if err != nil {
+		if err := rows.Scan(&senderID, &content, &ts); err != nil {
 			continue
 		}
-
-		from := sender.Name
-		to := receiver.Name
-		if senderID == receiver.ID { // «кто отправил» меняем местами
-			from = receiver.Name
-			to = sender.Name
+		// определяем from/to
+		var fromUser, toUser string
+		if senderID == sender.ID {
+			fromUser = sender.Name
+			toUser = m.To
+		} else {
+			fromUser = m.To
+			toUser = sender.Name
 		}
-
-		// Добавляем в начало (prepend), чтобы итоговый список был ↑ по времени
+		// prepend, чтобы oldest→newest
 		history = append([]Message{{
 			Type:      "message",
-			From:      from,
-			To:        to,
+			From:      fromUser,
+			To:        toUser,
 			Content:   content,
 			Timestamp: ts.Unix(),
-		}}, history...) // prepend — в правильном порядке
+		}}, history...)
 	}
 
-	// Отправляем каждый message-пакет по очереди
+	// 6) Шлём клиенту каждое сообщение в JSON-строке
 	for _, msg := range history {
 		data, _ := json.Marshal(msg)
-		data = append(data, '\n')
-		conn.Write(data)
+		conn.Write(append(data, '\n'))
 	}
 }
 
@@ -290,5 +296,119 @@ func handleLogin(conn net.Conn, m Message) (userID int64, err error) {
 	resp := Message{Type: "login_ok", Content: "OK"}
 	data, _ := json.Marshal(resp)
 	conn.Write(append(data, '\n'))
+
+	sendChatList(conn, userID)
 	return userID, nil
+}
+
+func fetchUserChats(ctx context.Context, uid int64) ([]ChatPreview, error) {
+	const q = `
+      SELECT ch.id, u.username, u.display_name,
+             COALESCE(m.content, '') AS last_msg,
+             COALESCE(EXTRACT(EPOCH FROM m.sent_at),0)::BIGINT AS last_ts
+      FROM chats ch
+      JOIN chat_members cm ON cm.chat_id=ch.id AND cm.user_id=$1
+      JOIN chat_members cm2 ON cm2.chat_id=ch.id AND cm2.user_id<>$1
+      JOIN users u ON u.id=cm2.user_id
+      LEFT JOIN LATERAL (
+        SELECT content, sent_at
+        FROM messages
+        WHERE chat_id=ch.id
+        ORDER BY sent_at DESC
+        LIMIT 1
+      ) m ON true;
+    `
+	rows, err := DB.Query(ctx, q, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChatPreview
+	for rows.Next() {
+		var c ChatPreview
+		if err := rows.Scan(&c.ChatID, &c.Peer, &c.DisplayName, &c.LastMsg, &c.LastTS); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func sendChatList(conn net.Conn, uid int64) {
+	chats, err := fetchUserChats(context.Background(), uid)
+	if err != nil { /* логгировать и return */
+	}
+	msg := Message{Type: "chatlist", Chats: chats}
+	data, _ := json.Marshal(msg)
+	conn.Write(append(data, '\n'))
+}
+
+// ===== Реализация handleUserSearch =====
+func handleUserSearch(conn net.Conn, m Message) {
+	q := strings.TrimSpace(m.Query) // теперь берём именно поле query
+	if q == "" {
+		return
+	}
+	ctx := context.Background()
+	rows, err := DB.Query(ctx, `
+        SELECT username, display_name
+        FROM users
+        WHERE username ILIKE $1 OR display_name ILIKE $1
+        ORDER BY username
+        LIMIT 20
+    `, "%"+q+"%")
+	if err != nil {
+		fmt.Println("DB error (user search):", err)
+		return
+	}
+	defer rows.Close()
+
+	var results []UserSummary
+	for rows.Next() {
+		var u UserSummary
+		rows.Scan(&u.Username, &u.DisplayName)
+		results = append(results, u)
+	}
+	// отпавляем клиенту список
+	resp := Message{Type: "user_search_result", Users: results}
+	data, _ := json.Marshal(resp)
+	conn.Write(append(data, '\n'))
+}
+
+// ===== Реализация handleStartChat =====
+func handleStartChat(conn net.Conn, m Message) {
+	// Предполагаем, что поле m.Peer передано в m.To
+	ctx := context.Background()
+	sender := clients[conn]
+	if sender == nil {
+		return
+	}
+	// получаем ID получателя
+	var peerID int64
+	err := DB.QueryRow(ctx, `SELECT id FROM users WHERE username=$1`, m.To).Scan(&peerID)
+	if err != nil {
+		fmt.Println("DB error (lookup peer):", err)
+		return
+	}
+	// создаём или получаем чат
+	chatID, err := GetOrCreatePrivateChat(ctx, sender.ID, peerID)
+	if err != nil {
+		fmt.Println("DB error (start chat):", err)
+		return
+	}
+	// собираем превью для нового чата (без last_msg)
+	preview := ChatPreview{
+		ChatID:      chatID,
+		Peer:        m.To,
+		DisplayName: m.To, // можно взять из users.display_name, если нужно
+		LastMsg:     "",
+		LastTS:      0,
+	}
+	// отправляем клиенту
+	resp := Message{Type: "chat_created", Chat: &preview}
+	data, _ := json.Marshal(resp)
+	conn.Write(append(data, '\n'))
+	// обновляем список у отправителя
+	sendChatList(conn, sender.ID)
 }
