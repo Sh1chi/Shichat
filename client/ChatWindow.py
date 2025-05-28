@@ -20,18 +20,14 @@ from PyQt5.QtWidgets import (
     QTextBrowser,
     QSplitter,
     QLabel,
-    QMessageBox,
+    QMessageBox, QDialog,
 )
 
 from NetworkWorker import NetworkWorker
 from Bubble import Bubble
 from theme import DarkTheme as T
-
-DARK_BG          = "#1F1F1F"   # общий фон
-DARK_PANEL       = "#2A2A2E"   # фон правой панели и «пузырей» входящих сообщений
-DARK_ACCENT      = "#2481CC"   # фирменный «телеграм-голубой»
-DARK_TEXT        = "#E0E0E0"
-DARK_SUBTEXT     = "#A0A0A0"
+from ChatItem import ChatItem
+from NewChatDialog import NewChatDialog
 
 
 # -------------------------- Главное окно чата ----------------------------
@@ -55,10 +51,11 @@ class ChatWindow(QWidget):
 
 
         # Список пользователей
-        self.user_list = QListWidget()
-        self.user_list.itemClicked.connect(self.change_chat)
-        self.user_list.setStyleSheet(T.qss_user_list())
-        splitter.addWidget(self.user_list)
+        self.chat_list = QListWidget()
+        self.chat_list.itemClicked.connect(self.change_chat)
+        self.chat_list.setStyleSheet(T.qss_user_list())
+        self.chat_list.itemSelectionChanged.connect(self.update_selection_styles)
+        splitter.addWidget(self.chat_list)
 
         # Правая панель — заголовок, переписка и ввод
         right_panel = QWidget()
@@ -98,19 +95,34 @@ class ChatWindow(QWidget):
         main_layout = QHBoxLayout(self)
         main_layout.addWidget(splitter)
 
+
+        # Добавляем кнопку "Новый чат" над списком
+        self.new_chat_btn = QPushButton("+ Новый чат")
+        self.new_chat_btn.setStyleSheet(T.qss_button())
+        self.new_chat_btn.clicked.connect(self.open_new_chat)
+        # Предполагаем, что chat_list обёрнут в layout, вставляем кнопку
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(self.new_chat_btn)
+        left_layout.addWidget(self.chat_list)
+        splitter.insertWidget(0, QWidget())  # очистить первый виджет
+        splitter.widget(0).setLayout(left_layout)
+
+
         # ---------- Подключение к сети ----------
         self.net = NetworkWorker(sock)
         self.net.message_received.connect(self.on_message)
-        self.net.userlist_received.connect(self.on_userlist)
+        self.net.chatlist_received.connect(self.on_chatlist)
         self.net.connection_lost.connect(self.on_disconnect)
         self.net.start()
 
+
     def change_chat(self, item: QListWidgetItem):
         # Переключение на выбранный чат
-        peer = item.text()
+        peer = item.data(Qt.UserRole)
         self.current_peer = peer
-        self.header.setText(peer)
+        self.header.setText(item.text().split("\n", 1)[0])
         self.chat_view.clear()
+        self.messages[peer].clear()
 
         # Запрашиваем историю сообщений с сервера
         pkt = {
@@ -124,13 +136,55 @@ class ChatWindow(QWidget):
             self.on_disconnect()
             return
 
-        for msg in self.messages[peer]:
-            outgoing = msg["from"] == self.username
-            self.chat_view.append(Bubble.html(msg["content"], outgoing, msg["timestamp"]))
 
-        self.chat_view.moveCursor(QTextCursor.End)
+    def on_chatlist(self, chats):
+        # Сохраним текущее открытое peer
+        prev = self.current_peer
+
+        self.chat_list.clear()
+        self.current_peer = None
+
+        for c in chats:
+            widget = ChatItem(
+                display_name=c['display_name'],
+                last_msg=c['last_msg'][:100],
+                last_ts=c['last_ts']
+            )
+            item = QListWidgetItem(self.chat_list)
+            item.setSizeHint(widget.sizeHint())
+            item.setData(Qt.UserRole, c['peer'])
+            self.chat_list.addItem(item)
+            self.chat_list.setItemWidget(item, widget)
+
+            # Если это тот же peer, что сейчас открыт — помечаем его
+            if c['peer'] == prev:
+                self.current_peer = prev
+                # выставляем его выделенным в QListWidget
+                self.chat_list.setCurrentItem(item)
+
+        # Если prev не None, то обновим хедер на display_name
+        if self.current_peer:
+            # найдём widget/text для текущего айтема
+            current = self.chat_list.currentItem()
+            if current:
+                # текст першей строки — display_name
+                display = current.text().split("\n", 1)[0]
+                self.header.setText(display)
+
+        # Наконец, обновляем стили всех элементов
+        self.update_selection_styles()
 
 
+    def update_selection_styles(self):
+        # для каждого элемента включаем/выключаем selected-стиль
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            widget = self.chat_list.itemWidget(item)
+            if widget:
+                widget.setSelected(item.isSelected())
+
+
+    """
     def on_userlist(self, users: list):
         # Обновление списка пользователей
         current = self.current_peer
@@ -143,6 +197,7 @@ class ChatWindow(QWidget):
             items = self.user_list.findItems(current, Qt.MatchExactly)
             if items:
                 self.user_list.setCurrentItem(items[0])
+"""
 
 
     def on_message(self, pkt: dict):
@@ -164,6 +219,7 @@ class ChatWindow(QWidget):
             self.chat_view.append(Bubble.html(content, outgoing, ts))
             self.chat_view.moveCursor(QTextCursor.End)
 
+
     def send_message(self):
         # Отправка сообщения на сервер
         text = self.input_edit.text().strip()
@@ -184,12 +240,28 @@ class ChatWindow(QWidget):
             return
         self.input_edit.clear()  # очищаем поле ввода
 
+
     def on_disconnect(self):
         # Обработка потери соединения
         QMessageBox.critical(self, "Отключено", "Соединение с сервером потеряно")
         self.close()
 
+
     def closeEvent(self, event):
         # При закрытии окна останавливаем сетевой поток
         self.net.stop()
         super().closeEvent(event)
+
+
+    def open_new_chat(self):
+        dlg = NewChatDialog(self.net, self)
+        if dlg.exec_() == QDialog.Accepted:
+            # После server response в on_chat_created
+            pass
+
+
+    def on_chat_created(self, data: dict):
+        # Сервер отправляет:
+        # {type: 'chat_created', chat_id:..., peer:..., display_name:..., last_msg:'', last_ts:...}
+        # Просто запросим обновлённый список чатов:
+        self.net.send_request_chatlist()

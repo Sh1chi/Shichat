@@ -65,3 +65,20 @@ class DarkTheme:
             background:{cls.ACCENT_HOVER};
         }}
         """
+
+    @classmethod
+    def qss_button_dark(cls, *, accent: str | None = None) -> str:
+        acc = accent or cls.ACCENT_SOFT
+        return f"""
+        QPushButton {{
+            background:{acc};
+            color:#FFFFFF;
+            border:none;
+            padding:6px 12px;
+            border-radius:6px;
+            font-weight:bold;
+        }}
+        QPushButton:hover {{
+            background:{cls.FIELD};
+        }}
+        """

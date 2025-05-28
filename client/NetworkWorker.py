@@ -12,8 +12,10 @@ from PyQt5.QtCore import Qt, pyqtSignal, QObject
 class NetworkWorker(QObject):
     # Сигналы для отправки событий в GUI
     message_received = pyqtSignal(dict)      # Пришло сообщение
-    userlist_received = pyqtSignal(list)     # Обновился список пользователей
+    chatlist_received = pyqtSignal(list)     # Обновился список пользователей
     connection_lost = pyqtSignal()           # Соединение разорвано
+    user_search_result = pyqtSignal(list)  # список найденных пользователей
+    chat_created = pyqtSignal(dict)  # данные созданного чата
 
     def __init__(self, sock: socket.socket):
         super().__init__()
@@ -48,12 +50,27 @@ class NetworkWorker(QObject):
                         continue
                     pkt = json.loads(line)
                     ptype = pkt.get("type")
-                    # Обработка полученных пакетов
-                    if ptype == "userlist":
-                        self.userlist_received.emit(pkt.get("users", []))
+                    if ptype == "chatlist":
+                        self.chatlist_received.emit(pkt.get("chats", []))
                     elif ptype == "message":
                         self.message_received.emit(pkt)
+                    elif ptype == "user_search_result":
+                        self.user_search_result.emit(pkt.get("users", []))
+                    elif ptype == "chat_created":
+                        self.chat_created.emit(pkt)
             except (ConnectionResetError, OSError, json.JSONDecodeError):
                 break
         # Если вышли из цикла — сигнал об отключении
         self.connection_lost.emit()
+
+
+    # Метод для поиска пользователей
+    def send_user_search(self, query: str):
+        pkt = {"type": "user_search", "query": query}
+        self.sock.sendall((json.dumps(pkt) + "\n").encode())
+
+
+    # Метод для создания нового чата
+    def send_start_chat(self, peer: str):
+        pkt = {"type": "start_chat", "to": peer}
+        self.sock.sendall((json.dumps(pkt) + "\n").encode())
