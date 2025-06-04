@@ -1,28 +1,22 @@
-"""bubble.py
-~~~~~~~~~~~~
-Формирует HTML‑разметку одного сообщения‑«пузыря».
-
-Использование:
-    from bubble import Bubble
-    html = Bubble.html("Привет!", outgoing=True, ts=time.time())
-"""
-
 from datetime import datetime
 from theme import DarkTheme as T
 
-
+# Класс Bubble отвечает за создание HTML-блока для одного сообщения
 class Bubble:
+    # Возвращает HTML-представление сообщения
+    # text — текст сообщения
+    # outgoing — True, если сообщение исходящее (от нас)
+    # ts — метка времени (timestamp)
     @classmethod
     def html(cls, text: str, outgoing: bool, ts: int) -> str:
-        # Цвета
-        bg_out    = T.ACCENT                   # ваш цвет «исходящих»
-        bg_in     = T.ACCENT_SOFT                    # цвет «входящих» (можно чуть светлее)
-        bg_color  = bg_out if outgoing else bg_in
-        txt_color = T.TEXT_MAIN
-        sub_color = T.TEXT_SUB
-        time_str  = datetime.fromtimestamp(ts).strftime("%H:%M")
+        bg_out = T.ACCENT  # цвет исходящих сообщений
+        bg_in = T.ACCENT_SOFT  # цвет входящих сообщений
+        bg_color = bg_out if outgoing else bg_in  # выбираем нужный фон
+        txt_color = T.TEXT_MAIN  # цвет текста
+        sub_color = T.TEXT_SUB  # цвет времени
+        time_str = datetime.fromtimestamp(ts).strftime("%H:%M")  # формат времени для подписи
 
-        # HTML самого пузыря — inline-block, width:auto, max-width чтобы не расползалось
+        # HTML-блок самого пузыря — прямоугольник с текстом и временем
         bubble_div = (
             f'<div style="display:inline-block;'
             f' width:auto; max-width:60%; white-space:pre-wrap;'
@@ -36,14 +30,13 @@ class Bubble:
             f'</div>'
         )
 
-        # Обёртка-таблица с двумя ячейками
-        # Для outgoing — пустая ячейка слева, пузырь справа
-        # Для incoming — наоборот
+        # Вся обёртка — таблица с двумя ячейками (для выравнивания по краям)
+        # Исходящие сообщения — справа, входящие — слева
         if outgoing:
             return (
                 '<table width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0;">'
                 '  <tr>'
-                '    <td></td>'
+                '    <td></td>'   # пустое пространство слева
                 '    <td align="right" valign="top">'
                 f'      {bubble_div}'
                 '    </td>'
@@ -57,7 +50,7 @@ class Bubble:
                 '    <td align="left" valign="top">'
                 f'      {bubble_div}'
                 '    </td>'
-                '    <td></td>'
+                '    <td></td>'   # пустое пространство справа
                 '  </tr>'
                 '</table>'
             )

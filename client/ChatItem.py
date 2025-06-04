@@ -12,60 +12,60 @@ from PyQt5.QtWidgets import (
 
 from theme import DarkTheme as T
 
+# Элемент списка чатов — отображает имя, время и последнее сообщение
 class ChatItem(QWidget):
     def __init__(self, display_name: str, last_msg: str, last_ts: int):
         super().__init__()
-        self.default_bg = T.BG             # "#1F1F1F" :contentReference[oaicite:0]{index=0}
-        self.sel_bg     = T.ACCENT         # "#2481CC" :contentReference[oaicite:1]{index=1}
+
+        self.default_bg = T.BG         # фон по умолчанию (не выбран)
+        self.sel_bg = T.ACCENT         # фон при выделении (выбран чат)
         self.setAutoFillBackground(True)
 
-        # Вертикальный лэйаут: вверху — имя+время, внизу — превью
+        # Основной вертикальный layout: верх — имя и время, низ — превью сообщения
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(8, 4, 8, 4)
+        vbox.setContentsMargins(8, 4, 8, 4)  # отступы от краёв
         vbox.setSpacing(2)
 
-        # — Верхний ряд: display_name (T.TEXT_MAIN) + время (T.TEXT_SUB)
+        # Верхний ряд: имя + время
         row = QHBoxLayout()
-        self.lbl_name = QLabel(display_name)
-        self.lbl_name.setStyleSheet(
-            f"color:{T.TEXT_MAIN}; font-weight:bold; font-size:15px;"
-        )
-        row.addWidget(self.lbl_name, 1)
 
-        ts_str = datetime.fromtimestamp(last_ts).strftime("%H:%M")
+        self.lbl_name = QLabel(display_name)  # имя пользователя или название чата
+        self.lbl_name.setStyleSheet(f"color:{T.TEXT_MAIN}; font-weight:bold; font-size:15px;")
+        row.addWidget(self.lbl_name, 1)  # растягивается по ширине
+
+        ts_str = datetime.fromtimestamp(last_ts).strftime("%H:%M")    # формат времени
         self.lbl_time = QLabel(ts_str)
-        self.lbl_time.setStyleSheet(
-            f"color:{T.TEXT_SUB}; font-size:11px;"
-        )
-        row.addWidget(self.lbl_time, 0, Qt.AlignRight)
+        self.lbl_time.setStyleSheet( f"color:{T.TEXT_SUB}; font-size:11px;")
+
+        row.addWidget(self.lbl_time, 0, Qt.AlignRight)   # время справа
         vbox.addLayout(row)
 
-        # — Нижний ряд: превью (T.TEXT_SUB)
+        # Нижний ряд: превью последнего сообщения
         self.lbl_preview = QLabel(last_msg)
-        self.lbl_preview.setStyleSheet(
-            f"color:{T.TEXT_SUB}; font-size:13px;"
-        )
+        self.lbl_preview.setStyleSheet(f"color:{T.TEXT_SUB}; font-size:13px;")
         # Одна строка в высоту
-        self.lbl_preview.setFixedHeight(
-            self.lbl_preview.fontMetrics().lineSpacing()
-        )
+        self.lbl_preview.setFixedHeight(self.lbl_preview.fontMetrics().lineSpacing()) # ограничиваем одной строкой
         vbox.addWidget(self.lbl_preview)
 
-        self._selected = False
-        self._update_style()
+        self._selected = False  # флаг выделения
+        self._update_style()  # применяем стиль
 
+
+    # Устанавливает флаг выделения и обновляет стиль
     def setSelected(self, sel: bool):
         self._selected = sel
         self._update_style()
 
+
+    # Обновляет фон и цвет текста в зависимости от состояния (выбран/не выбран)
     def _update_style(self):
-        bg = self.sel_bg if self._selected else self.default_bg
-        # фон блока
-        self.setStyleSheet(f"background:{bg};")
-        # текст при выборе белый, иначе T.TEXT_MAIN / T.TEXT_SUB
-        name_col    = "#FFFFFF" if self._selected else T.TEXT_MAIN
+        bg = self.sel_bg if self._selected else self.default_bg  # выбираем фон
+        self.setStyleSheet(f"background:{bg};")  # применяем фон
+
+        # Цвета текста: при выделении — белый, иначе стандартные из темы
+        name_col = "#FFFFFF" if self._selected else T.TEXT_MAIN
         preview_col = "#FFFFFF" if self._selected else T.TEXT_SUB
-        time_col    = "#FFFFFF" if self._selected else T.TEXT_SUB
+        time_col = "#FFFFFF" if self._selected else T.TEXT_SUB
 
         self.lbl_name.setStyleSheet(
             f"color:{name_col}; font-weight:bold; font-size:15px;"

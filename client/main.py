@@ -1,37 +1,20 @@
 # Импорт стандартных библиотек
 import sys
-import json
-import socket
-import threading
-import time
-from datetime import datetime
-from collections import defaultdict
-from typing import Dict
 
-# Импорт компонентов PyQt5
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
-from PyQt5.QtGui import QTextCursor
-from PyQt5.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QPushButton,
-    QListWidget,
-    QListWidgetItem,
-    QTextBrowser,
-    QSplitter,
-    QLabel,
-    QMessageBox,
-)
+# Импорт основных классов из PyQt5 для запуска GUI-приложения
+from PyQt5.QtWidgets import QApplication
 
+# Импорт окна входа в систему
 from LoginWindow import LoginWindow
 
 
-# ------------------------- Точка входа -------------------------
 if __name__ == "__main__":
+    # QApplication — основной объект приложения PyQt, необходим для запуска интерфейса
     app = QApplication(sys.argv)
+
+    # Создаём и отображаем окно входа
     w = LoginWindow()
     w.show()
+
+    # Запускаем главный цикл обработки событий (окно будет работать, пока не будет закрыто)
     sys.exit(app.exec_())
