@@ -23,12 +23,12 @@ func handleMessage(senderConn net.Conn, m Message) {
 
 	ctx := context.Background()
 
-	// Пытаемся преобразовать m.To в число (если это ID группы)
-	chatID, err := strconv.ParseInt(m.To, 10, 64)
-	isGroup := (err == nil) // Булевая переменная: true, если это групповой чат
-
 	// Если это не группа — значит, приватный чат, нужно получить chatID вручную
-	if !isGroup {
+	var chatID int64
+	if id, err := strconv.ParseInt(m.To, 10, 64); err == nil {
+		chatID = id // это групповой чат
+	} else {
+		// Получаем ID получателя и создаём приватный чат при необходимости
 		var recvID int64
 		if err := DB.QueryRow(ctx,
 			`SELECT id FROM users WHERE username=$1`, m.To,
@@ -69,7 +69,7 @@ func handleMessage(senderConn net.Conn, m Message) {
 	senderConn.Write(data)
 
 	// Рассылаем сообщение другим участникам
-	if isGroup {
+	if _, err := strconv.ParseInt(m.To, 10, 64); err == nil {
 		// Групповой чат — получаем всех участников
 		rows, _ := DB.Query(ctx,
 			`SELECT user_id FROM chat_members WHERE chat_id=$1`, chatID)
@@ -101,7 +101,7 @@ func handleMessage(senderConn net.Conn, m Message) {
 	sendChatList(senderConn, sender.ID)
 
 	// Также обновляем чат-листы у остальных участников
-	if isGroup {
+	if _, err := strconv.ParseInt(m.To, 10, 64); err == nil {
 		rows, _ := DB.Query(ctx,
 			`SELECT user_id FROM chat_members WHERE chat_id=$1`, chatID)
 		defer rows.Close()
@@ -120,7 +120,8 @@ func handleMessage(senderConn net.Conn, m Message) {
 		// Приватный чат — обновляем только у собеседника
 		mu.Lock()
 		if rc, ok := nameToConn[m.To]; ok {
-			sendChatList(rc, sender.ID)
+			recipientID := clients[rc].ID
+			sendChatList(rc, recipientID)
 		}
 		mu.Unlock()
 	}
@@ -138,12 +139,11 @@ func handleHistoryRequest(conn net.Conn, m Message) {
 	}
 	ctx := context.Background()
 
-	// Определяем, группа это или приватный чат
-	chatID, err := strconv.ParseInt(m.To, 10, 64)
-	isGroup := (err == nil)
-
+	var chatID int64
 	// Если это приватный чат — находим или создаём его
-	if !isGroup {
+	if id, err := strconv.ParseInt(m.To, 10, 64); err == nil {
+		chatID = id
+	} else {
 		var rid int64
 		if err := DB.QueryRow(ctx,
 			`SELECT id FROM users WHERE username=$1`, m.To,

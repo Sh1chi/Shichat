@@ -48,6 +48,11 @@ func handleStartChat(conn net.Conn, m Message) {
 
 	// Обновляем клиенту список чатов
 	sendChatList(conn, sender.ID)
+
+	if peerConn, ok := nameToConn[m.To]; ok {
+		// peerID мы уже получили запросом к БД выше
+		sendChatList(peerConn, peerID)
+	}
 }
 
 // handleCreateGroup обрабатывает создание группового чата.

@@ -157,7 +157,7 @@ func sendChatList(conn net.Conn, uid int64) {
 	chats, err := fetchUserChats(context.Background(), uid)
 	if err != nil {
 		// Ошибку можно логгировать, но клиенту не отправляем
-		return
+		//return
 	}
 
 	// Формируем JSON-пакет и отправляем по соединению
